@@ -4,28 +4,42 @@ This project contains the DNA Web front-end built with [Next.js](https://nextjs.
 
 ## Getting started
 
+Follow these steps to bring the app online in about 5–10 minutes:
+
 1. Install dependencies:
    ```bash
    npm install
    ```
-2. Create a local environment file:
+2. Copy the example environment file and adjust it for local development:
    ```bash
    cp .env.local.example .env.local
    ```
-3. Update `.env.local` to point to your backend. For local development the API usually runs at `http://localhost:2080/api`:
+3. Edit `.env.local` so the front-end can talk to your backend API (the local default is `http://localhost:2080/api`):
    ```ini
    NEXT_PUBLIC_API_BASE_URL=http://localhost:2080/api
    ```
+4. Start the development server (runs on port `4001`):
+   ```bash
+   npm run dev
+   ```
 
-## Development server
-
-Run the development server on port `4001`:
+After the initial setup you can simply run everything in one go:
 
 ```bash
-npm run dev
+npm install && npm run dev
 ```
 
-Then open [http://localhost:4001](http://localhost:4001) in your browser.
+Once the server is running, open [http://localhost:4001](http://localhost:4001) in your browser.
+
+### First-time user flow
+
+On a fresh database you will be prompted to:
+
+1. Register a new account.
+2. Log in with the newly created credentials.
+3. Claim your initial monster to start playing.
+
+These steps appear automatically the first time you land on the site.
 
 ## Production build
 
