@@ -2,12 +2,21 @@
 
 import { CSSProperties, ReactNode } from "react";
 import MonsterAvatar from "./MonsterAvatar";
+import RankBadge from "./RankBadge";
 import { MonsterData, MonsterGene } from "@/lib/monsters";
+
+export type StatChange = {
+  delta?: number | null;
+  changed?: boolean;
+};
+
+export type StatChangeMap = Partial<Record<"atk" | "def" | "spd" | "hp" | "rank", StatChange>>;
 
 type MonsterCardProps = {
   monster: MonsterData;
   footer?: ReactNode;
   highlight?: boolean;
+  statHighlights?: StatChangeMap | null;
 };
 
 const cardStyle: CSSProperties = {
@@ -43,6 +52,13 @@ const headerStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "0.6rem",
+};
+
+const badgeRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: "0.5rem",
 };
 
 const badgeStyle: CSSProperties = {
@@ -82,6 +98,12 @@ const statsGridStyle: CSSProperties = {
   gap: "0.85rem",
 };
 
+const battleStatsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: "0.85rem",
+};
+
 const statCardStyle: CSSProperties = {
   borderRadius: "14px",
   padding: "0.85rem 1rem",
@@ -90,6 +112,18 @@ const statCardStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "0.3rem",
+};
+
+const statCardPositiveHighlightStyle: CSSProperties = {
+  border: "1px solid rgba(250, 204, 21, 0.55)",
+  boxShadow: "0 0 0 1px rgba(250, 204, 21, 0.2)",
+  background: "rgba(250, 204, 21, 0.12)",
+};
+
+const statCardNegativeHighlightStyle: CSSProperties = {
+  border: "1px solid rgba(248, 113, 113, 0.55)",
+  boxShadow: "0 0 0 1px rgba(248, 113, 113, 0.22)",
+  background: "rgba(248, 113, 113, 0.12)",
 };
 
 const statLabelStyle: CSSProperties = {
@@ -102,6 +136,32 @@ const statLabelStyle: CSSProperties = {
 const statValueStyle: CSSProperties = {
   fontSize: "1.15rem",
   fontWeight: 700,
+};
+
+const statValuePositiveHighlightStyle: CSSProperties = {
+  color: "#fef08a",
+  textShadow: "0 0 18px rgba(250, 204, 21, 0.45)",
+};
+
+const statValueNegativeHighlightStyle: CSSProperties = {
+  color: "#fecaca",
+  textShadow: "0 0 18px rgba(248, 113, 113, 0.42)",
+};
+
+const statDeltaStyle: CSSProperties = {
+  fontSize: "0.8rem",
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+};
+
+const statDeltaPositiveStyle: CSSProperties = {
+  color: "#facc15",
+  textShadow: "0 0 12px rgba(250, 204, 21, 0.38)",
+};
+
+const statDeltaNegativeStyle: CSSProperties = {
+  color: "#fca5a5",
+  textShadow: "0 0 12px rgba(248, 113, 113, 0.35)",
 };
 
 const geneListStyle: CSSProperties = {
@@ -193,6 +253,16 @@ function formatNumber(value: unknown): string {
   return "--";
 }
 
+function formatDeltaValue(delta: number): string {
+  const formatted = Number.isInteger(delta)
+    ? delta.toString()
+    : delta.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  if (delta > 0 && !formatted.startsWith("+")) {
+    return `+${formatted}`;
+  }
+  return formatted;
+}
+
 function formatLevel(level: unknown): string {
   if (typeof level === "number" && Number.isFinite(level)) {
     return `Lv. ${level}`;
@@ -213,7 +283,7 @@ function formatRarity(rarity: unknown): string {
   return "未知";
 }
 
-const MonsterCard = ({ monster, footer, highlight = false }: MonsterCardProps) => {
+const MonsterCard = ({ monster, footer, highlight = false, statHighlights }: MonsterCardProps) => {
   const idLabel = `#${monster.id}`;
   const displayName = monster.name ?? monster.nickname ?? null;
   const species = monster.species ?? "未知物种";
@@ -221,6 +291,19 @@ const MonsterCard = ({ monster, footer, highlight = false }: MonsterCardProps) =
   const level = formatLevel(monster.level);
   const energy = formatNumber(monster.energy);
   const genes = Array.isArray(monster.genes) ? monster.genes : [];
+  const rankHighlight = statHighlights?.rank;
+  const rankDelta = rankHighlight?.delta ?? null;
+  const rankActive = Boolean(rankHighlight?.changed || (rankDelta != null && rankDelta !== 0));
+  const rankValue = monster.rank;
+  const hasRank =
+    rankValue != null && !(typeof rankValue === "string" && rankValue.trim().length === 0);
+  const battleStats = [
+    { key: "atk" as const, label: "攻击", value: monster.atk },
+    { key: "def" as const, label: "防御", value: monster.def },
+    { key: "spd" as const, label: "速度", value: monster.spd },
+    { key: "hp" as const, label: "生命", value: monster.hp },
+  ];
+  const hasBattleStats = battleStats.some(({ value }) => value != null);
 
   return (
     <article
@@ -252,7 +335,17 @@ const MonsterCard = ({ monster, footer, highlight = false }: MonsterCardProps) =
         <MonsterAvatar id={String(monster.id)} />
       </div>
       <header style={headerStyle}>
-        <span style={badgeStyle}>{idLabel}</span>
+        <div style={badgeRowStyle}>
+          <span style={badgeStyle}>{idLabel}</span>
+          {hasRank || rankActive ? (
+            <RankBadge
+              rank={rankValue}
+              highlight={rankActive}
+              delta={rankDelta}
+              changed={Boolean(rankHighlight?.changed)}
+            />
+          ) : null}
+        </div>
         {displayName ? <span style={subtitleStyle}>{displayName}</span> : null}
         <h2 style={titleStyle}>{species}</h2>
       </header>
@@ -274,6 +367,55 @@ const MonsterCard = ({ monster, footer, highlight = false }: MonsterCardProps) =
           </div>
         </div>
       </section>
+
+      {hasBattleStats ? (
+        <section>
+          <h3 style={sectionTitleStyle}>战斗属性</h3>
+          <div style={battleStatsGridStyle}>
+            {battleStats.map(({ key, label, value }) => {
+              const highlightInfo = statHighlights?.[key];
+              const delta = highlightInfo?.delta ?? null;
+              const hasDelta = delta != null && delta !== 0;
+              const isNegative = delta != null && delta < 0;
+              const isActive = Boolean(highlightInfo?.changed || hasDelta);
+              const cardHighlightStyle = isNegative
+                ? statCardNegativeHighlightStyle
+                : statCardPositiveHighlightStyle;
+              const valueHighlightStyle = isNegative
+                ? statValueNegativeHighlightStyle
+                : statValuePositiveHighlightStyle;
+              const deltaHighlightStyle = isNegative
+                ? statDeltaNegativeStyle
+                : statDeltaPositiveStyle;
+
+              return (
+                <div
+                  key={key}
+                  style={{
+                    ...statCardStyle,
+                    ...(isActive ? cardHighlightStyle : null),
+                  }}
+                >
+                  <span style={statLabelStyle}>{label}</span>
+                  <strong
+                    style={{
+                      ...statValueStyle,
+                      ...(isActive ? valueHighlightStyle : null),
+                    }}
+                  >
+                    {formatNumber(value)}
+                  </strong>
+                  {hasDelta ? (
+                    <span style={{ ...statDeltaStyle, ...deltaHighlightStyle }}>
+                      {formatDeltaValue(delta)}
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <section>
         <h3 style={sectionTitleStyle}>基因</h3>

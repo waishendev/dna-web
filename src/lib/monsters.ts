@@ -8,6 +8,11 @@ export type MonsterData = {
   rarity?: string | null;
   level?: number | null;
   energy?: number | null;
+  rank?: string | number | null;
+  atk?: number | null;
+  def?: number | null;
+  spd?: number | null;
+  hp?: number | null;
   genes?: MonsterGene[] | null;
   [key: string]: unknown;
 };
@@ -123,6 +128,12 @@ export function normalizeMonster(raw: unknown, fallbackId: string): MonsterRecor
   const nicknameValue = pickFirstString(raw, ["nickname", "alias"]);
   const speciesValue = pickFirstString(raw, ["species", "type", "element"]);
   const rarityValue = pickFirstString(raw, ["rarity", "tier", "grade", "rarityLevel"]);
+  const rankNumber = pickFirstNumber(raw, ["rank", "ranking", "rankLevel", "rankScore"]);
+  const rankString = pickFirstString(raw, ["rank", "ranking", "tier", "class", "grade", "rankTitle"]);
+  const attackValue = pickFirstNumber(raw, ["atk", "attack", "offense", "strength"]);
+  const defenseValue = pickFirstNumber(raw, ["def", "defense", "guard", "resistance", "protection"]);
+  const speedValue = pickFirstNumber(raw, ["spd", "speed", "agility", "dexterity"]);
+  const healthValue = pickFirstNumber(raw, ["hp", "health", "hitpoints", "life", "vigor"]);
 
   const normalized: MonsterRecord = {
     id,
@@ -132,6 +143,11 @@ export function normalizeMonster(raw: unknown, fallbackId: string): MonsterRecor
     rarity: rarityValue ?? undefined,
     level: levelValue ?? undefined,
     energy: energyValue ?? undefined,
+    rank: rankNumber ?? rankString ?? undefined,
+    atk: attackValue ?? undefined,
+    def: defenseValue ?? undefined,
+    spd: speedValue ?? undefined,
+    hp: healthValue ?? undefined,
     genes,
     raw,
   };

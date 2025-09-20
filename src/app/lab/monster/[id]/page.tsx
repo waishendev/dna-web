@@ -9,7 +9,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import MonsterCard from "@/components/MonsterCard";
+import MonsterCard, { type StatChangeMap } from "@/components/MonsterCard";
 import MonsterAvatar from "@/components/MonsterAvatar";
 import ActionBar from "@/components/ActionBar";
 import { apiFetch } from "@/lib/api";
@@ -333,6 +333,62 @@ function buildDetailRows(monster: MonsterRecord): DetailRow[] {
   return rows;
 }
 
+type NumericStatKey = "atk" | "def" | "spd" | "hp";
+
+const NUMERIC_STATS: NumericStatKey[] = ["atk", "def", "spd", "hp"];
+
+function computeStatHighlights(
+  previous: MonsterRecord | null,
+  next: MonsterRecord | null,
+): StatChangeMap | null {
+  if (!previous || !next) {
+    return null;
+  }
+
+  const highlights: StatChangeMap = {};
+  let hasChange = false;
+
+  for (const key of NUMERIC_STATS) {
+    const previousValue = parseNumericValue(previous[key]);
+    const nextValue = parseNumericValue(next[key]);
+
+    if (previousValue == null && nextValue == null) {
+      continue;
+    }
+
+    if (previousValue == null && nextValue != null) {
+      highlights[key] = nextValue !== 0 ? { delta: nextValue, changed: true } : { changed: true };
+      hasChange = true;
+      continue;
+    }
+
+    if (previousValue != null && nextValue != null && nextValue !== previousValue) {
+      highlights[key] = { delta: nextValue - previousValue, changed: true };
+      hasChange = true;
+    }
+  }
+
+  const previousRankNumber = parseNumericValue(previous.rank);
+  const nextRankNumber = parseNumericValue(next.rank);
+
+  if (previousRankNumber != null && nextRankNumber != null) {
+    const delta = nextRankNumber - previousRankNumber;
+    if (delta !== 0) {
+      highlights.rank = { delta, changed: true };
+      hasChange = true;
+    }
+  } else {
+    const previousRankText = formatMaybeString(previous.rank);
+    const nextRankText = formatMaybeString(next.rank);
+    if (previousRankText !== nextRankText && (previousRankText || nextRankText)) {
+      highlights.rank = { changed: true };
+      hasChange = true;
+    }
+  }
+
+  return hasChange ? highlights : null;
+}
+
 export default function MonsterDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -345,14 +401,48 @@ export default function MonsterDetailPage() {
   const [isFeeding, setIsFeeding] = useState(false);
   const [isTraining, setIsTraining] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
+  const [statHighlights, setStatHighlights] = useState<StatChangeMap | null>(null);
   const mountedRef = useRef(false);
+  const statHighlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (statHighlightTimeoutRef.current) {
+        clearTimeout(statHighlightTimeoutRef.current);
+        statHighlightTimeoutRef.current = null;
+      }
     };
   }, []);
+
+  const clearStatHighlights = useCallback(() => {
+    if (statHighlightTimeoutRef.current) {
+      clearTimeout(statHighlightTimeoutRef.current);
+      statHighlightTimeoutRef.current = null;
+    }
+    setStatHighlights(null);
+  }, []);
+
+  const triggerStatHighlights = useCallback(
+    (previous: MonsterRecord | null, next: MonsterRecord | null) => {
+      const highlights = computeStatHighlights(previous, next);
+      if (!highlights) {
+        return;
+      }
+
+      if (statHighlightTimeoutRef.current) {
+        clearTimeout(statHighlightTimeoutRef.current);
+      }
+
+      setStatHighlights(highlights);
+      statHighlightTimeoutRef.current = setTimeout(() => {
+        setStatHighlights(null);
+        statHighlightTimeoutRef.current = null;
+      }, 2400);
+    },
+    [],
+  );
 
   const fetchMonster = useCallback(async () => {
     if (!mountedRef.current) {
@@ -360,6 +450,7 @@ export default function MonsterDetailPage() {
     }
 
     if (!monsterId) {
+      clearStatHighlights();
       setMonster(null);
       setError("无法识别怪兽编号。");
       setIsLoading(false);
@@ -376,6 +467,7 @@ export default function MonsterDetailPage() {
 
       if (response.status === 404) {
         if (mountedRef.current) {
+          clearStatHighlights();
           setMonster(null);
           setError("未找到对应的怪兽。");
         }
@@ -400,6 +492,7 @@ export default function MonsterDetailPage() {
         throw new Error("Unexpected monster payload");
       }
 
+      clearStatHighlights();
       setMonster(normalized);
     } catch (err) {
       console.error("Failed to fetch monster detail", err);
@@ -407,6 +500,7 @@ export default function MonsterDetailPage() {
         return;
       }
 
+      clearStatHighlights();
       setMonster(null);
       setError("无法加载怪兽详情，请稍后重试。");
     } finally {
@@ -414,7 +508,7 @@ export default function MonsterDetailPage() {
         setIsLoading(false);
       }
     }
-  }, [monsterId]);
+  }, [monsterId, clearStatHighlights]);
 
   useEffect(() => {
     const token = getToken();
@@ -454,6 +548,7 @@ export default function MonsterDetailPage() {
 
     const snapshot = monster;
     const optimistic = applyFeedPreview(monster);
+    clearStatHighlights();
     setMonster(optimistic);
     setIsFeeding(true);
     setActionFeedback({ type: "info", message: "正在喂食，能量即将恢复…" });
@@ -471,6 +566,7 @@ export default function MonsterDetailPage() {
         const message = await extractErrorMessage(response, "喂食失败，请稍后再试。");
         if (mountedRef.current) {
           setMonster(snapshot);
+          clearStatHighlights();
           setActionFeedback({ type: "error", message });
           setIsFeeding(false);
         }
@@ -489,7 +585,9 @@ export default function MonsterDetailPage() {
 
       if (updatedMonster) {
         setMonster(updatedMonster);
+        triggerStatHighlights(snapshot, updatedMonster);
       } else {
+        clearStatHighlights();
         void fetchMonster();
       }
 
@@ -498,6 +596,7 @@ export default function MonsterDetailPage() {
       console.error("Failed to feed monster", err);
       if (mountedRef.current) {
         setMonster(snapshot);
+        clearStatHighlights();
         setActionFeedback({
           type: "error",
           message:
@@ -511,7 +610,15 @@ export default function MonsterDetailPage() {
         setIsFeeding(false);
       }
     }
-  }, [monster, isFeeding, isTraining, monsterId, fetchMonster]);
+  }, [
+    monster,
+    isFeeding,
+    isTraining,
+    monsterId,
+    fetchMonster,
+    clearStatHighlights,
+    triggerStatHighlights,
+  ]);
 
   const handleTrain = useCallback(async () => {
     if (!monster || isTraining || isFeeding) {
@@ -534,6 +641,7 @@ export default function MonsterDetailPage() {
 
     const snapshot = monster;
     const optimistic = applyTrainPreview(monster);
+    clearStatHighlights();
     setMonster(optimistic);
     setIsTraining(true);
     setActionFeedback({ type: "info", message: "正在训练怪兽…" });
@@ -547,6 +655,7 @@ export default function MonsterDetailPage() {
         const message = await extractErrorMessage(response, "训练失败，请稍后再试。");
         if (mountedRef.current) {
           setMonster(snapshot);
+          clearStatHighlights();
           setActionFeedback({ type: "error", message });
           setIsTraining(false);
         }
@@ -565,7 +674,9 @@ export default function MonsterDetailPage() {
 
       if (updatedMonster) {
         setMonster(updatedMonster);
+        triggerStatHighlights(snapshot, updatedMonster);
       } else {
+        clearStatHighlights();
         void fetchMonster();
       }
 
@@ -574,6 +685,7 @@ export default function MonsterDetailPage() {
       console.error("Failed to train monster", err);
       if (mountedRef.current) {
         setMonster(snapshot);
+        clearStatHighlights();
         setActionFeedback({
           type: "error",
           message:
@@ -587,7 +699,15 @@ export default function MonsterDetailPage() {
         setIsTraining(false);
       }
     }
-  }, [monster, isTraining, isFeeding, monsterId, fetchMonster]);
+  }, [
+    monster,
+    isTraining,
+    isFeeding,
+    monsterId,
+    fetchMonster,
+    clearStatHighlights,
+    triggerStatHighlights,
+  ]);
 
   return (
     <main style={layoutStyle}>
@@ -630,6 +750,7 @@ export default function MonsterDetailPage() {
             <MonsterCard
               monster={monster}
               highlight
+              statHighlights={statHighlights ?? undefined}
               footer={
                 <ActionBar
                   onFeed={handleFeed}
