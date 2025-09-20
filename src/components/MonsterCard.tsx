@@ -1,6 +1,7 @@
 "use client";
 
 import { CSSProperties, ReactNode } from "react";
+import MonsterAvatar from "./MonsterAvatar";
 import { MonsterData, MonsterGene } from "@/lib/monsters";
 
 type MonsterCardProps = {
@@ -22,6 +23,20 @@ const cardStyle: CSSProperties = {
   gap: "1.5rem",
   height: "100%",
   transition: "transform 0.2s ease, box-shadow 0.2s ease",
+};
+
+const avatarWrapperStyle: CSSProperties = {
+  alignSelf: "center",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "0.8rem",
+  borderRadius: "999px",
+  background: "rgba(15, 23, 42, 0.58)",
+  border: "1px solid rgba(148, 163, 184, 0.28)",
+  boxShadow: "0 24px 48px rgba(15, 23, 42, 0.38)",
+  overflow: "hidden",
+  transition: "box-shadow 0.2s ease, border 0.2s ease, background 0.2s ease",
 };
 
 const headerStyle: CSSProperties = {
@@ -220,6 +235,22 @@ const MonsterCard = ({ monster, footer, highlight = false }: MonsterCardProps) =
           : cardStyle.border,
       }}
     >
+      <div
+        style={{
+          ...avatarWrapperStyle,
+          border: highlight
+            ? "1px solid rgba(59, 130, 246, 0.48)"
+            : avatarWrapperStyle.border,
+          background: highlight
+            ? "rgba(59, 130, 246, 0.18)"
+            : avatarWrapperStyle.background,
+          boxShadow: highlight
+            ? "0 32px 60px rgba(37, 99, 235, 0.38)"
+            : avatarWrapperStyle.boxShadow,
+        }}
+      >
+        <MonsterAvatar id={String(monster.id)} />
+      </div>
       <header style={headerStyle}>
         <span style={badgeStyle}>{idLabel}</span>
         {displayName ? <span style={subtitleStyle}>{displayName}</span> : null}

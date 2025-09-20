@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import MonsterCard from "@/components/MonsterCard";
+import MonsterAvatar from "@/components/MonsterAvatar";
 import ActionBar from "@/components/ActionBar";
 import { apiFetch } from "@/lib/api";
 import { getToken } from "@/lib/auth";
@@ -38,6 +39,25 @@ const contentStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "2.25rem",
+};
+
+const heroAvatarShellStyle: CSSProperties = {
+  alignSelf: "center",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const heroAvatarRingStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "1.4rem",
+  borderRadius: "999px",
+  background: "rgba(15, 23, 42, 0.6)",
+  border: "1px solid rgba(148, 163, 184, 0.32)",
+  boxShadow: "0 36px 75px rgba(15, 23, 42, 0.45)",
+  overflow: "hidden",
 };
 
 const actionRowStyle: CSSProperties = {
@@ -600,6 +620,13 @@ export default function MonsterDetailPage() {
 
         {monster ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
+            {monsterId ? (
+              <div style={heroAvatarShellStyle}>
+                <div style={heroAvatarRingStyle}>
+                  <MonsterAvatar id={monsterId} size={160} />
+                </div>
+              </div>
+            ) : null}
             <MonsterCard
               monster={monster}
               highlight
