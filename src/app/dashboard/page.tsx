@@ -4,19 +4,14 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { useRouter } from "next/navigation";
 import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { clearToken, getToken } from "@/lib/auth";
-
-type WalletData = {
-  balance?: number | string;
-  available?: number | string;
-  total?: number | string;
-  amount?: number | string;
-  currency?: string | null;
-  symbol?: string | null;
-  unit?: string | null;
-  address?: string | null;
-  walletAddress?: string | null;
-  [key: string]: unknown;
-};
+import {
+  WalletData,
+  formatBalance,
+  getNumericBalance,
+  normalizeWallet,
+  resolveAddress,
+  resolveCurrency,
+} from "@/lib/wallet";
 
 const containerStyle: CSSProperties = {
   minHeight: "100vh",
@@ -86,6 +81,26 @@ const errorStyle: CSSProperties = {
   lineHeight: 1.6,
 };
 
+const successStyle: CSSProperties = {
+  padding: "1rem 1.25rem",
+  borderRadius: "12px",
+  background: "rgba(34, 197, 94, 0.12)",
+  border: "1px solid rgba(134, 239, 172, 0.35)",
+  color: "#bbf7d0",
+  fontSize: "0.95rem",
+  lineHeight: 1.6,
+};
+
+const infoStyle: CSSProperties = {
+  padding: "1rem 1.25rem",
+  borderRadius: "12px",
+  background: "rgba(59, 130, 246, 0.12)",
+  border: "1px solid rgba(147, 197, 253, 0.35)",
+  color: "#dbeafe",
+  fontSize: "0.95rem",
+  lineHeight: 1.6,
+};
+
 const buttonRowStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
@@ -103,103 +118,73 @@ const buttonStyle: CSSProperties = {
   transition: "transform 0.2s ease, opacity 0.2s ease",
 };
 
+type FeedbackTone = "info" | "success" | "error";
+
+type ActionFeedback = {
+  type: FeedbackTone;
+  message: string;
+};
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
-function toMaybeNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-
-    const parsed = Number(trimmed);
-    if (!Number.isNaN(parsed)) {
-      return parsed;
-    }
-  }
-
-  return null;
-}
-
-function toMaybeString(value: unknown): string | null {
+function extractMessage(value: unknown): string | null {
   if (typeof value === "string") {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
+  if (isPlainObject(value)) {
+    const keys = ["message", "error", "detail", "msg"];
+    for (const key of keys) {
+      const candidate = value[key];
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
   }
 
   return null;
 }
 
-function normalizeWallet(payload: unknown): WalletData {
-  if (isPlainObject(payload)) {
-    if (payload.wallet && isPlainObject(payload.wallet)) {
-      return payload.wallet as WalletData;
+async function extractErrorMessage(response: Response, fallback: string) {
+  try {
+    const text = await response.text();
+    if (!text) {
+      return fallback;
     }
 
-    return payload as WalletData;
-  }
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return fallback;
+    }
 
-  return { balance: payload as number | string };
+    try {
+      const parsed = JSON.parse(trimmed);
+      const message = extractMessage(parsed);
+      if (message) {
+        return message;
+      }
+    } catch {
+      const message = extractMessage(trimmed);
+      if (message) {
+        return message;
+      }
+    }
+
+    return trimmed;
+  } catch {
+    return fallback;
+  }
 }
 
-function pickBalanceValue(wallet: WalletData): unknown {
-  if (wallet.balance != null) {
-    return wallet.balance;
+function resolveErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
   }
 
-  if (wallet.available != null) {
-    return wallet.available;
-  }
-
-  if (wallet.total != null) {
-    return wallet.total;
-  }
-
-  if (wallet.amount != null) {
-    return wallet.amount;
-  }
-
-  return null;
-}
-
-function formatBalance(wallet: WalletData): string {
-  const candidate = pickBalanceValue(wallet);
-  const numeric = toMaybeNumber(candidate);
-  if (numeric != null) {
-    return numeric.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
-  }
-
-  const text = toMaybeString(candidate);
-  if (text) {
-    return text;
-  }
-
-  return "--";
-}
-
-function resolveCurrency(wallet: WalletData): string | null {
-  const currency =
-    toMaybeString(wallet.currency) ??
-    toMaybeString(wallet.symbol) ??
-    toMaybeString(wallet.unit);
-
-  return currency ?? null;
-}
-
-function resolveAddress(wallet: WalletData): string | null {
-  const address =
-    toMaybeString(wallet.address) ?? toMaybeString(wallet.walletAddress);
-  return address ?? null;
+  return fallback;
 }
 
 export default function DashboardPage() {
@@ -207,6 +192,8 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletData | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
+  const [isGranting, setIsGranting] = useState(false);
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -270,10 +257,64 @@ export default function DashboardPage() {
     router.push("/lab");
   };
 
+  const handleOpenGacha = () => {
+    router.push("/gacha");
+  };
+
+  const handleGrantCoins = useCallback(async () => {
+    if (isGranting) {
+      return;
+    }
+
+    setActionFeedback(null);
+    setIsGranting(true);
+
+    try {
+      const response = await apiFetch("/wallet/grant", { method: "POST" });
+      if (!response.ok) {
+        const fallback = `加币失败（${response.status}）`;
+        const message = await extractErrorMessage(response, fallback);
+        throw new Error(message);
+      }
+
+      setActionFeedback({
+        type: "success",
+        message: "已为您发放 1000 coins（开发环境测试）。",
+      });
+      await fetchWallet();
+    } catch (err) {
+      setActionFeedback({
+        type: "error",
+        message: resolveErrorMessage(err, "加币失败，请稍后重试。"),
+      });
+    } finally {
+      setIsGranting(false);
+    }
+  }, [fetchWallet, isGranting]);
+
   const apiBaseUrl = getApiBaseUrl();
   const balanceLabel = wallet ? formatBalance(wallet) : "--";
   const currencyLabel = wallet ? resolveCurrency(wallet) : null;
   const addressLabel = wallet ? resolveAddress(wallet) : null;
+  const coinBalance = getNumericBalance(wallet);
+  const coinUnitLabel = currencyLabel ?? "coins";
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const renderActionFeedback = () => {
+    if (!actionFeedback) {
+      return null;
+    }
+
+    if (actionFeedback.type === "success") {
+      return <div style={successStyle}>{actionFeedback.message}</div>;
+    }
+
+    if (actionFeedback.type === "info") {
+      return <div style={infoStyle}>{actionFeedback.message}</div>;
+    }
+
+    return <div style={errorStyle}>{actionFeedback.message}</div>;
+  };
 
   return (
     <main style={containerStyle}>
@@ -283,7 +324,7 @@ export default function DashboardPage() {
           <p style={{ opacity: 0.75, lineHeight: 1.6, fontSize: "1rem" }}>
             当前 API 地址：{apiBaseUrl || "未配置"}
             <br />
-            在这里查看您的钱包余额并前往怪兽实验室。
+            在这里查看您的 coins 余额、进行扭蛋或前往怪兽实验室。
           </p>
         </header>
 
@@ -294,11 +335,9 @@ export default function DashboardPage() {
             </span>
             <div style={balanceStyle}>
               {balanceLabel}
-              {currencyLabel ? (
-                <span style={{ fontSize: "1.1rem", marginLeft: "0.65rem", opacity: 0.8 }}>
-                  {currencyLabel}
-                </span>
-              ) : null}
+              <span style={{ fontSize: "1.1rem", marginLeft: "0.65rem", opacity: 0.8 }}>
+                {coinUnitLabel}
+              </span>
             </div>
           </div>
 
@@ -308,10 +347,23 @@ export default function DashboardPage() {
             </div>
           ) : null}
 
+          {coinBalance != null ? (
+            <div style={balanceMetaStyle}>
+              <span>可用 coins：{coinBalance.toLocaleString("zh-CN")}</span>
+            </div>
+          ) : null}
+
           {isLoading ? (
             <p style={{ opacity: 0.7 }}>正在获取钱包信息…</p>
           ) : error ? (
             <div style={errorStyle}>{error}</div>
+          ) : actionFeedback ? (
+            renderActionFeedback()
+          ) : null}
+          {!isLoading && !error && !actionFeedback ? (
+            <p style={{ opacity: 0.7, fontSize: "0.9rem" }}>
+              coins 可用于扭蛋和怪兽实验室的其他功能。
+            </p>
           ) : null}
         </section>
 
@@ -327,12 +379,24 @@ export default function DashboardPage() {
             }}
             onClick={() => {
               if (!isLoading) {
+                setActionFeedback(null);
                 void fetchWallet();
               }
             }}
             disabled={isLoading}
           >
             刷新钱包
+          </button>
+          <button
+            type="button"
+            style={{
+              ...buttonStyle,
+              background: "rgba(236, 72, 153, 0.18)",
+              color: "#fbcfe8",
+            }}
+            onClick={handleOpenGacha}
+          >
+            前往扭蛋机
           </button>
           <button
             type="button"
@@ -345,6 +409,26 @@ export default function DashboardPage() {
           >
             前往怪兽实验室
           </button>
+          {!isProduction ? (
+            <button
+              type="button"
+              style={{
+                ...buttonStyle,
+                background: "rgba(16, 185, 129, 0.2)",
+                color: "#a7f3d0",
+                opacity: isGranting ? 0.65 : 1,
+                cursor: isGranting ? "wait" : "pointer",
+              }}
+              onClick={() => {
+                if (!isGranting) {
+                  void handleGrantCoins();
+                }
+              }}
+              disabled={isGranting}
+            >
+              {isGranting ? "加币中…" : "开发态：+1000"}
+            </button>
+          ) : null}
           <button
             type="button"
             style={{
