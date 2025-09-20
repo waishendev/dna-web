@@ -14,7 +14,11 @@ import MonsterAvatar from "@/components/MonsterAvatar";
 import ActionBar from "@/components/ActionBar";
 import { apiFetch } from "@/lib/api";
 import { getToken } from "@/lib/auth";
-import { MonsterRecord, normalizeMonster } from "@/lib/monsters";
+import {
+  MonsterRecord,
+  extractMonsterFromPayload,
+  mergeMonsterRecords,
+} from "@/lib/monsters";
 
 const layoutStyle: CSSProperties = {
   minHeight: "100vh",
@@ -487,7 +491,7 @@ export default function MonsterDetailPage() {
         return;
       }
 
-      const normalized = normalizeMonster(payload, String(monsterId));
+      const normalized = extractMonsterFromPayload(payload, String(monsterId));
       if (!normalized) {
         throw new Error("Unexpected monster payload");
       }
@@ -576,7 +580,7 @@ export default function MonsterDetailPage() {
       let updatedMonster: MonsterRecord | null = null;
       if (response.status !== 204) {
         const payload = await response.json();
-        updatedMonster = normalizeMonster(payload, String(monsterId));
+        updatedMonster = extractMonsterFromPayload(payload, String(monsterId));
       }
 
       if (!mountedRef.current) {
@@ -584,8 +588,9 @@ export default function MonsterDetailPage() {
       }
 
       if (updatedMonster) {
-        setMonster(updatedMonster);
-        triggerStatHighlights(snapshot, updatedMonster);
+        const merged = mergeMonsterRecords(snapshot, updatedMonster) ?? updatedMonster;
+        setMonster(merged);
+        triggerStatHighlights(snapshot, merged);
       } else {
         clearStatHighlights();
         void fetchMonster();
@@ -665,7 +670,7 @@ export default function MonsterDetailPage() {
       let updatedMonster: MonsterRecord | null = null;
       if (response.status !== 204) {
         const payload = await response.json();
-        updatedMonster = normalizeMonster(payload, String(monsterId));
+        updatedMonster = extractMonsterFromPayload(payload, String(monsterId));
       }
 
       if (!mountedRef.current) {
@@ -673,8 +678,9 @@ export default function MonsterDetailPage() {
       }
 
       if (updatedMonster) {
-        setMonster(updatedMonster);
-        triggerStatHighlights(snapshot, updatedMonster);
+        const merged = mergeMonsterRecords(snapshot, updatedMonster) ?? updatedMonster;
+        setMonster(merged);
+        triggerStatHighlights(snapshot, merged);
       } else {
         clearStatHighlights();
         void fetchMonster();
