@@ -441,6 +441,10 @@ export default function MonsterDetailPage() {
     try {
       const response = await apiFetch(`/monsters/${encodeURIComponent(monsterId)}/feed`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ item: "basic-food" }),
       });
 
       if (!response.ok) {

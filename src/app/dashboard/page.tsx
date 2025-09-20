@@ -270,7 +270,13 @@ export default function DashboardPage() {
     setIsGranting(true);
 
     try {
-      const response = await apiFetch("/wallet/grant", { method: "POST" });
+      const response = await apiFetch("/wallet/grant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ amount: 1000 }),
+      });
       if (!response.ok) {
         const fallback = `加币失败（${response.status}）`;
         const message = await extractErrorMessage(response, fallback);
