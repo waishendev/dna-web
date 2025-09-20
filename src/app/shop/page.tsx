@@ -939,8 +939,8 @@ function buildPurchaseCandidates(item: ShopItemRecord, quantity: number): Purcha
   };
 
   const candidates: PurchaseCandidate[] = [
-    { url: "/shop/purchase", method: "POST", body, headers },
     { url: "/shop/buy", method: "POST", body, headers },
+    { url: "/shop/purchase", method: "POST", body, headers },
     { url: "/shop/order", method: "POST", body, headers },
     { url: `/shop/${encoded}/purchase`, method: "POST", body, headers },
     { url: `/shop/${encoded}/buy`, method: "POST", body, headers },
@@ -1196,22 +1196,46 @@ export default function ShopPage() {
       setInventoryError(null);
 
       try {
-        const response = await apiFetch("/bag", { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
-        }
+        const fallbackMessage = "无法加载背包信息，请稍后重试。";
+        const endpoints = ["/inventory", "/bag"];
+        const retryableStatuses = new Set([404, 405, 501]);
+        let lastErrorMessage: string | null = null;
 
-        let payload: unknown = [];
-        if (response.status !== 204) {
-          payload = await response.json();
-        }
+        for (let index = 0; index < endpoints.length; index += 1) {
+          const endpoint = endpoints[index];
+          let response: Response;
 
-        const items = parseBagItems(payload);
-        if (!mountedRef.current) {
+          try {
+            response = await apiFetch(endpoint, { cache: "no-store" });
+          } catch (err) {
+            lastErrorMessage = resolveErrorMessage(err, fallbackMessage);
+            break;
+          }
+
+          if (!response.ok) {
+            if (retryableStatuses.has(response.status) && index < endpoints.length - 1) {
+              continue;
+            }
+
+            lastErrorMessage = await extractErrorMessage(response, fallbackMessage);
+            break;
+          }
+
+          let payload: unknown = [];
+          if (response.status !== 204) {
+            payload = await response.json();
+          }
+
+          if (!mountedRef.current) {
+            return;
+          }
+
+          const items = parseBagItems(payload);
+          applyInventoryItems(items);
           return;
         }
 
-        applyInventoryItems(items);
+        throw new Error(lastErrorMessage ?? fallbackMessage);
       } catch (err) {
         console.error("Failed to fetch inventory for shop", err);
         if (!mountedRef.current) {
@@ -1219,7 +1243,7 @@ export default function ShopPage() {
         }
 
         setInventoryItems([]);
-        setInventoryError("无法加载背包信息，请稍后重试。");
+        setInventoryError(resolveErrorMessage(err, "无法加载背包信息，请稍后重试。"));
       } finally {
         if (!mountedRef.current) {
           return;

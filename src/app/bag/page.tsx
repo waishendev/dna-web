@@ -14,7 +14,12 @@ import MonsterPicker from "@/components/MonsterPicker";
 import { apiFetch } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { BagItemRecord, parseBagItems } from "@/lib/items";
-import { MonsterRecord, normalizeMonster, parseMonsterList } from "@/lib/monsters";
+import {
+  MonsterRecord,
+  extractMonsterFromPayload,
+  mergeMonsterRecords,
+  parseMonsterList,
+} from "@/lib/monsters";
 
 type FeedbackTone = "info" | "success" | "error";
 
@@ -489,50 +494,6 @@ function resolveErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function extractMonsterFromPayload(payload: unknown, fallbackId: string): MonsterRecord | null {
-  const direct = normalizeMonster(payload, fallbackId);
-  if (direct) {
-    return direct;
-  }
-
-  if (Array.isArray(payload)) {
-    for (const entry of payload) {
-      const candidate = extractMonsterFromPayload(entry, fallbackId);
-      if (candidate) {
-        return candidate;
-      }
-    }
-    return null;
-  }
-
-  if (isPlainObject(payload)) {
-    const keys = [
-      "monster",
-      "data",
-      "result",
-      "record",
-      "entity",
-      "updated",
-      "updatedMonster",
-      "target",
-      "response",
-    ];
-
-    for (const key of keys) {
-      if (!(key in payload)) {
-        continue;
-      }
-
-      const candidate = extractMonsterFromPayload(payload[key], fallbackId);
-      if (candidate) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
-}
-
 export default function BagPage() {
   const router = useRouter();
   const [items, setItems] = useState<BagItemRecord[]>([]);
@@ -591,22 +552,46 @@ export default function BagPage() {
       setItemError(null);
 
       try {
-        const response = await apiFetch("/bag", { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
-        }
+        const fallbackMessage = "无法加载背包内容，请稍后重试。";
+        const endpoints = ["/inventory", "/bag"];
+        const retryableStatuses = new Set([404, 405, 501]);
+        let lastErrorMessage: string | null = null;
 
-        let payload: unknown = [];
-        if (response.status !== 204) {
-          payload = await response.json();
-        }
+        for (let index = 0; index < endpoints.length; index += 1) {
+          const endpoint = endpoints[index];
+          let response: Response;
 
-        if (!mountedRef.current) {
+          try {
+            response = await apiFetch(endpoint, { cache: "no-store" });
+          } catch (err) {
+            lastErrorMessage = resolveErrorMessage(err, fallbackMessage);
+            break;
+          }
+
+          if (!response.ok) {
+            if (retryableStatuses.has(response.status) && index < endpoints.length - 1) {
+              continue;
+            }
+
+            lastErrorMessage = await extractErrorMessage(response, fallbackMessage);
+            break;
+          }
+
+          let payload: unknown = [];
+          if (response.status !== 204) {
+            payload = await response.json();
+          }
+
+          if (!mountedRef.current) {
+            return;
+          }
+
+          const list = parseBagItems(payload);
+          applyInventoryUpdate(list);
           return;
         }
 
-        const list = parseBagItems(payload);
-        applyInventoryUpdate(list);
+        throw new Error(lastErrorMessage ?? fallbackMessage);
       } catch (err) {
         console.error("Failed to fetch bag items", err);
         if (!mountedRef.current) {
@@ -615,7 +600,7 @@ export default function BagPage() {
 
         setItems([]);
         setSelectedItemKey(null);
-        setItemError("无法加载背包内容，请稍后重试。");
+        setItemError(resolveErrorMessage(err, "无法加载背包内容，请稍后重试。"));
       } finally {
         if (!mountedRef.current) {
           return;
@@ -813,11 +798,16 @@ export default function BagPage() {
         if (updatedMonster) {
           const monsterIdentifier = toMonsterKey(updatedMonster);
           setMonsters((current) => {
-            const next = current.map((entry) =>
-              toMonsterKey(entry) === monsterIdentifier ? updatedMonster : entry,
-            );
+            let found = false;
+            const next = current.map((entry) => {
+              if (toMonsterKey(entry) === monsterIdentifier) {
+                found = true;
+                return mergeMonsterRecords(entry, updatedMonster) ?? updatedMonster;
+              }
+              return entry;
+            });
 
-            if (!next.some((entry) => toMonsterKey(entry) === monsterIdentifier)) {
+            if (!found) {
               next.push(updatedMonster);
             }
 
