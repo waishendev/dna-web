@@ -1,4 +1,4 @@
-import { getToken } from "./auth";
+import { clearToken, getToken } from "./auth";
 
 export type ApiRequestInit = RequestInit & {
   /**
@@ -25,6 +25,20 @@ function resolveUrl(path: string): string {
   return `${apiBase}${path}`;
 }
 
+function redirectToLogin() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  clearToken();
+
+  if (window.location.pathname === "/login") {
+    return;
+  }
+
+  window.location.href = "/login";
+}
+
 export async function apiFetch(path: string, init: ApiRequestInit = {}) {
   const { skipAuth, headers, ...rest } = init;
   const requestHeaders = new Headers(headers ?? {});
@@ -37,10 +51,16 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}) {
   }
 
   const url = resolveUrl(path);
-  return fetch(url, {
+  const response = await fetch(url, {
     ...rest,
     headers: requestHeaders,
   });
+
+  if (!skipAuth && response.status === 401) {
+    redirectToLogin();
+  }
+
+  return response;
 }
 
 export async function apiGetJson<T>(path: string, init: ApiRequestInit = {}) {
