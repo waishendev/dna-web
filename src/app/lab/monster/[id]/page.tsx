@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import MonsterCard from "@/components/MonsterCard";
+import ActionBar from "@/components/ActionBar";
 import { apiFetch } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { MonsterRecord, normalizeMonster } from "@/lib/monsters";
@@ -130,6 +131,116 @@ const metadataValueStyle: CSSProperties = {
   lineHeight: 1.4,
 };
 
+type FeedbackTone = "info" | "success" | "error";
+
+type ActionFeedback = {
+  type: FeedbackTone;
+  message: string;
+};
+
+const MIN_TRAIN_ENERGY = 10;
+const TRAIN_ENERGY_COST = 10;
+const TRAIN_EXP_GAIN = 20;
+const FEED_ENERGY_GAIN = 25;
+
+function parseNumericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.replace(/,/g, "").trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function createUpdatedMonster(
+  monster: MonsterRecord,
+  updates: Partial<Pick<MonsterRecord, "energy" | "experience" | "level">>,
+): MonsterRecord {
+  return {
+    ...monster,
+    ...updates,
+    raw: {
+      ...monster.raw,
+      ...updates,
+    },
+  };
+}
+
+function applyFeedPreview(monster: MonsterRecord): MonsterRecord {
+  const energyValue = parseNumericValue(monster.energy);
+  const nextEnergy = energyValue == null ? FEED_ENERGY_GAIN : energyValue + FEED_ENERGY_GAIN;
+  return createUpdatedMonster(monster, { energy: nextEnergy });
+}
+
+function applyTrainPreview(monster: MonsterRecord): MonsterRecord {
+  const energyValue = parseNumericValue(monster.energy);
+  const experienceValue = parseNumericValue(monster.experience);
+  const levelValue = parseNumericValue(monster.level);
+
+  const updates: Partial<Pick<MonsterRecord, "energy" | "experience" | "level">> = {};
+
+  if (energyValue != null) {
+    updates.energy = Math.max(0, energyValue - TRAIN_ENERGY_COST);
+  }
+
+  if (experienceValue != null) {
+    const nextExperience = experienceValue + TRAIN_EXP_GAIN;
+    updates.experience = nextExperience;
+
+    if (levelValue != null) {
+      const levelThreshold = (levelValue + 1) * 100;
+      if (experienceValue < levelThreshold && nextExperience >= levelThreshold) {
+        updates.level = levelValue + 1;
+      }
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return monster;
+  }
+
+  return createUpdatedMonster(monster, updates);
+}
+
+async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const cloned = response.clone();
+    const data = (await cloned.json()) as Record<string, unknown> | null;
+    if (data && typeof data === "object") {
+      const keys = ["message", "error", "detail", "msg"] as const;
+      for (const key of keys) {
+        const value = data[key];
+        if (typeof value === "string" && value.trim().length > 0) {
+          return value.trim();
+        }
+      }
+    }
+  } catch {
+    // ignore parsing error
+  }
+
+  try {
+    const text = await response.clone().text();
+    const trimmed = text.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  } catch {
+    // ignore text parsing error
+  }
+
+  return fallback;
+}
+
 type DetailRow = {
   label: string;
   value: string;
@@ -211,6 +322,9 @@ export default function MonsterDetailPage() {
   const [monster, setMonster] = useState<MonsterRecord | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isFeeding, setIsFeeding] = useState(false);
+  const [isTraining, setIsTraining] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -294,6 +408,162 @@ export default function MonsterDetailPage() {
 
   const detailRows = monster ? buildDetailRows(monster) : [];
   const descriptionText = monster ? formatMaybeString(monster.description) : null;
+  const energyValue = monster ? parseNumericValue(monster.energy) : null;
+  const trainHelperText =
+    energyValue != null && energyValue < MIN_TRAIN_ENERGY
+      ? `训练需要至少 ${MIN_TRAIN_ENERGY} 点能量，请先喂食补充能量。`
+      : null;
+
+  const feedDisabled = !monster || isLoading || isFeeding || isTraining;
+  const trainDisabled =
+    !monster ||
+    isLoading ||
+    isTraining ||
+    isFeeding ||
+    (energyValue != null && energyValue < MIN_TRAIN_ENERGY);
+
+  const handleFeed = useCallback(async () => {
+    if (!monster || isFeeding || isTraining) {
+      return;
+    }
+
+    if (!monsterId) {
+      setActionFeedback({ type: "error", message: "无法识别怪兽编号。" });
+      return;
+    }
+
+    const snapshot = monster;
+    const optimistic = applyFeedPreview(monster);
+    setMonster(optimistic);
+    setIsFeeding(true);
+    setActionFeedback({ type: "info", message: "正在喂食，能量即将恢复…" });
+
+    try {
+      const response = await apiFetch(`/monsters/${encodeURIComponent(monsterId)}/feed`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const message = await extractErrorMessage(response, "喂食失败，请稍后再试。");
+        if (mountedRef.current) {
+          setMonster(snapshot);
+          setActionFeedback({ type: "error", message });
+          setIsFeeding(false);
+        }
+        return;
+      }
+
+      let updatedMonster: MonsterRecord | null = null;
+      if (response.status !== 204) {
+        const payload = await response.json();
+        updatedMonster = normalizeMonster(payload, String(monsterId));
+      }
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      if (updatedMonster) {
+        setMonster(updatedMonster);
+      } else {
+        void fetchMonster();
+      }
+
+      setActionFeedback({ type: "success", message: "喂食成功，能量已恢复。" });
+    } catch (err) {
+      console.error("Failed to feed monster", err);
+      if (mountedRef.current) {
+        setMonster(snapshot);
+        setActionFeedback({
+          type: "error",
+          message:
+            err instanceof Error && err.message
+              ? err.message
+              : "喂食失败，请稍后再试。",
+        });
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsFeeding(false);
+      }
+    }
+  }, [monster, isFeeding, isTraining, monsterId, fetchMonster]);
+
+  const handleTrain = useCallback(async () => {
+    if (!monster || isTraining || isFeeding) {
+      return;
+    }
+
+    if (!monsterId) {
+      setActionFeedback({ type: "error", message: "无法识别怪兽编号。" });
+      return;
+    }
+
+    const currentEnergy = parseNumericValue(monster.energy);
+    if (currentEnergy != null && currentEnergy < MIN_TRAIN_ENERGY) {
+      setActionFeedback({
+        type: "error",
+        message: `能量不足，至少需要 ${MIN_TRAIN_ENERGY} 点能量才能训练。`,
+      });
+      return;
+    }
+
+    const snapshot = monster;
+    const optimistic = applyTrainPreview(monster);
+    setMonster(optimistic);
+    setIsTraining(true);
+    setActionFeedback({ type: "info", message: "正在训练怪兽…" });
+
+    try {
+      const response = await apiFetch(`/monsters/${encodeURIComponent(monsterId)}/train`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const message = await extractErrorMessage(response, "训练失败，请稍后再试。");
+        if (mountedRef.current) {
+          setMonster(snapshot);
+          setActionFeedback({ type: "error", message });
+          setIsTraining(false);
+        }
+        return;
+      }
+
+      let updatedMonster: MonsterRecord | null = null;
+      if (response.status !== 204) {
+        const payload = await response.json();
+        updatedMonster = normalizeMonster(payload, String(monsterId));
+      }
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      if (updatedMonster) {
+        setMonster(updatedMonster);
+      } else {
+        void fetchMonster();
+      }
+
+      setActionFeedback({ type: "success", message: "训练完成！怪兽的能力有所提升。" });
+    } catch (err) {
+      console.error("Failed to train monster", err);
+      if (mountedRef.current) {
+        setMonster(snapshot);
+        setActionFeedback({
+          type: "error",
+          message:
+            err instanceof Error && err.message
+              ? err.message
+              : "训练失败，请稍后再试。",
+        });
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsTraining(false);
+      }
+    }
+  }, [monster, isTraining, isFeeding, monsterId, fetchMonster]);
 
   return (
     <main style={layoutStyle}>
@@ -326,7 +596,22 @@ export default function MonsterDetailPage() {
 
         {monster ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-            <MonsterCard monster={monster} highlight />
+            <MonsterCard
+              monster={monster}
+              highlight
+              footer={
+                <ActionBar
+                  onFeed={handleFeed}
+                  onTrain={handleTrain}
+                  isFeeding={isFeeding}
+                  isTraining={isTraining}
+                  feedDisabled={feedDisabled}
+                  trainDisabled={trainDisabled}
+                  helperText={trainHelperText}
+                  feedback={actionFeedback}
+                />
+              }
+            />
 
             {descriptionText ? (
               <section style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
