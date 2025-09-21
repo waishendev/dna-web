@@ -16,9 +16,11 @@ import { getToken } from "@/lib/auth";
 import { BagItemRecord, parseBagItems } from "@/lib/items";
 import {
   MonsterRecord,
+  extractEvolutionInfo,
   extractMonsterFromPayload,
-  mergeMonsterRecords,
   parseMonsterList,
+  formatEvolutionStageLabel,
+  resolveEvolutionStage,
 } from "@/lib/monsters";
 
 type FeedbackTone = "info" | "success" | "error";
@@ -793,8 +795,12 @@ export default function BagPage() {
         return;
       }
 
+      let successMessage = `已使用 1 个 ${itemLabel}，目标怪兽的能量已补充。`;
+
       if (payload != null) {
         const updatedMonster = extractMonsterFromPayload(payload, monsterKey);
+        const evolutionInfo = extractEvolutionInfo(payload);
+
         if (updatedMonster) {
           const monsterIdentifier = toMonsterKey(updatedMonster);
           setMonsters((current) => {
@@ -802,7 +808,7 @@ export default function BagPage() {
             const next = current.map((entry) => {
               if (toMonsterKey(entry) === monsterIdentifier) {
                 found = true;
-                return mergeMonsterRecords(entry, updatedMonster) ?? updatedMonster;
+                return updatedMonster;
               }
               return entry;
             });
@@ -814,6 +820,22 @@ export default function BagPage() {
             return next;
           });
           setSelectedMonsterId(monsterIdentifier);
+        }
+
+        if (evolutionInfo?.happened) {
+          const stageValue = resolveEvolutionStage(updatedMonster ?? null, evolutionInfo);
+          const stageLabel = formatEvolutionStageLabel(stageValue);
+          if (stageLabel) {
+            successMessage = `已使用 1 个 ${itemLabel}，目标怪兽进化至 ${stageLabel}！`;
+          } else {
+            const fallback = evolutionInfo.message?.trim();
+            if (fallback) {
+              const hasEnding = /[.!！。]$/u.test(fallback);
+              successMessage = `已使用 1 个 ${itemLabel}，${hasEnding ? fallback : `${fallback}！`}`;
+            } else {
+              successMessage = `已使用 1 个 ${itemLabel}，目标怪兽完成进化！`;
+            }
+          }
         }
 
         const inventoryUpdate = parseBagItems(payload);
@@ -828,7 +850,7 @@ export default function BagPage() {
 
       setFeedback({
         type: "success",
-        message: `已使用 1 个 ${itemLabel}，目标怪兽的能量已补充。`,
+        message: successMessage,
       });
     } catch (err) {
       console.error("Failed to feed monster from bag", err);

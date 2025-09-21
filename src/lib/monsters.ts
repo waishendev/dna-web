@@ -13,6 +13,8 @@ export type MonsterData = {
   def?: number | null;
   spd?: number | null;
   hp?: number | null;
+  stage?: string | number | null;
+  appearanceRevision?: number | string | null;
   genes?: MonsterGene[] | null;
   [key: string]: unknown;
 };
@@ -42,6 +44,19 @@ const RANK_TEXT_KEYS = [
   "name",
   "label",
 ];
+const STAGE_NUMBER_KEYS = ["stage", "evolutionStage", "stageLevel", "stageIndex", "currentStage", "nextStage"];
+const STAGE_TEXT_KEYS = ["stage", "evolutionStage", "stageLabel", "stageName", "phase", "form"];
+const APPEARANCE_REVISION_KEYS = [
+  "appearanceRevision",
+  "appearance_rev",
+  "appearanceVersion",
+  "appearance_rev_id",
+  "avatarRevision",
+  "avatar_rev",
+  "avatarVersion",
+];
+const EVOLUTION_CONTAINER_KEYS = ["evolution", "evolutionResult", "evolutionInfo"];
+const EVOLUTION_MESSAGE_KEYS = ["message", "detail", "description", "text", "summary"];
 
 const STAT_CONTAINER_KEYS = [
   "stats",
@@ -272,6 +287,9 @@ export function normalizeMonster(raw: unknown, fallbackId: string): MonsterRecor
   const defenseValue = pickFirstNumber(raw, DEFENSE_KEYS);
   const speedValue = pickFirstNumber(raw, SPEED_KEYS);
   const healthValue = pickFirstNumber(raw, HEALTH_KEYS);
+  const stageNumberValue = pickFirstNumber(raw, STAGE_NUMBER_KEYS);
+  const stageTextValue = pickFirstString(raw, STAGE_TEXT_KEYS);
+  const appearanceRevisionValue = pickFirstNumber(raw, APPEARANCE_REVISION_KEYS);
 
   const normalized: MonsterRecord = {
     id,
@@ -289,6 +307,37 @@ export function normalizeMonster(raw: unknown, fallbackId: string): MonsterRecor
     genes,
     raw,
   };
+
+  if (stageNumberValue != null) {
+    normalized.stage = stageNumberValue;
+  } else if (stageTextValue) {
+    normalized.stage = stageTextValue;
+  }
+
+  if (appearanceRevisionValue != null) {
+    normalized.appearanceRevision = appearanceRevisionValue;
+  } else {
+    const appearanceContainer = raw.appearance;
+    if (ensureRecord(appearanceContainer)) {
+      const nestedRevision = pickFirstNumber(appearanceContainer, [
+        "revision",
+        "rev",
+        "version",
+      ]);
+      if (nestedRevision != null) {
+        normalized.appearanceRevision = nestedRevision;
+      } else {
+        const revisionText = pickFirstString(appearanceContainer, [
+          "revision",
+          "rev",
+          "version",
+        ]);
+        if (revisionText) {
+          normalized.appearanceRevision = revisionText;
+        }
+      }
+    }
+  }
 
   const statContainers: Record<string, unknown>[] = [];
   collectStatContainers(raw, statContainers, new WeakSet());
@@ -451,6 +500,256 @@ export function extractMonsterFromPayload(
   return extractMonsterFromPayloadInternal(payload, fallbackId, new WeakSet());
 }
 
+export type EvolutionInfo = {
+  happened: boolean;
+  stage?: string | number | null;
+  message?: string | null;
+};
+
+function parseBooleanLike(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) {
+      return null;
+    }
+    if (value === 1) {
+      return true;
+    }
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === "true" || trimmed === "yes" || trimmed === "y" || trimmed === "1") {
+      return true;
+    }
+    if (trimmed === "false" || trimmed === "no" || trimmed === "n" || trimmed === "0") {
+      return false;
+    }
+  }
+
+  return null;
+}
+
+function toStagePrimitive(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  return null;
+}
+
+function parseEvolutionCandidate(value: unknown): EvolutionInfo | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "boolean") {
+    return { happened: value };
+  }
+
+  if (typeof value === "number" || typeof value === "string") {
+    const booleanValue = parseBooleanLike(value);
+    if (booleanValue != null) {
+      return { happened: booleanValue };
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        return { happened: false, message: trimmed };
+      }
+    }
+
+    return null;
+  }
+
+  if (!ensureRecord(value)) {
+    return null;
+  }
+
+  const result: EvolutionInfo = { happened: false };
+
+  const happenedKeys = [
+    "happened",
+    "didHappen",
+    "completed",
+    "evolved",
+    "hasEvolved",
+    "triggered",
+  ];
+
+  for (const key of happenedKeys) {
+    if (!(key in value)) {
+      continue;
+    }
+
+    const parsed = parseBooleanLike(value[key]);
+    if (parsed != null) {
+      result.happened = parsed;
+      break;
+    }
+  }
+
+  for (const key of [...STAGE_NUMBER_KEYS, ...STAGE_TEXT_KEYS]) {
+    if (!(key in value)) {
+      continue;
+    }
+
+    const stageValue = toStagePrimitive(value[key]);
+    if (stageValue != null) {
+      result.stage = stageValue;
+      break;
+    }
+  }
+
+  const messageValue = pickFirstString(value, EVOLUTION_MESSAGE_KEYS);
+  if (messageValue) {
+    result.message = messageValue;
+  }
+
+  return result;
+}
+
+function extractEvolutionInfoInternal(
+  payload: unknown,
+  seen: WeakSet<object>,
+): EvolutionInfo | null {
+  if (Array.isArray(payload)) {
+    for (const entry of payload) {
+      const candidate = extractEvolutionInfoInternal(entry, seen);
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  if (!ensureRecord(payload)) {
+    return null;
+  }
+
+  if (seen.has(payload)) {
+    return null;
+  }
+  seen.add(payload);
+
+  for (const key of EVOLUTION_CONTAINER_KEYS) {
+    if (key in payload) {
+      const candidate = parseEvolutionCandidate(payload[key]);
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+
+  for (const key of MONSTER_PAYLOAD_KEYS) {
+    if (key in payload) {
+      const nested = extractEvolutionInfoInternal(payload[key], seen);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+
+  for (const value of Object.values(payload)) {
+    if (value == null) {
+      continue;
+    }
+
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      continue;
+    }
+
+    const candidate = extractEvolutionInfoInternal(value, seen);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+export function extractEvolutionInfo(payload: unknown): EvolutionInfo | null {
+  return extractEvolutionInfoInternal(payload, new WeakSet());
+}
+
+export function resolveEvolutionStage(
+  monster: MonsterRecord | null,
+  evolution: EvolutionInfo | null,
+): string | number | null {
+  const candidates: unknown[] = [];
+
+  if (evolution?.stage != null) {
+    candidates.push(evolution.stage);
+  }
+
+  if (monster) {
+    if (monster.stage != null) {
+      candidates.push(monster.stage);
+    }
+
+    const raw = monster.raw;
+    for (const key of [...STAGE_NUMBER_KEYS, ...STAGE_TEXT_KEYS]) {
+      if (key in raw) {
+        candidates.push(raw[key]);
+      }
+    }
+
+    const appearanceValue = raw.appearance;
+    if (ensureRecord(appearanceValue)) {
+      for (const key of STAGE_TEXT_KEYS) {
+        if (key in appearanceValue) {
+          candidates.push(appearanceValue[key]);
+        }
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    const normalized = toStagePrimitive(candidate);
+    if (normalized != null) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+export function formatEvolutionStageLabel(stage: string | number | null): string | null {
+  if (stage == null) {
+    return null;
+  }
+
+  if (typeof stage === "number") {
+    if (!Number.isFinite(stage)) {
+      return null;
+    }
+    return `第 ${stage} 阶段`;
+  }
+
+  const trimmed = stage.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^\d+(?:\.\d+)?$/u.test(trimmed)) {
+    return `第 ${trimmed} 阶段`;
+  }
+
+  return trimmed;
+}
+
 const MERGE_PRESERVE_KEYS: (keyof MonsterRecord)[] = [
   "atk",
   "def",
@@ -460,6 +759,8 @@ const MERGE_PRESERVE_KEYS: (keyof MonsterRecord)[] = [
   "energy",
   "level",
   "experience",
+  "stage",
+  "appearanceRevision",
 ];
 
 function shouldPreserveValue(value: unknown): boolean {
