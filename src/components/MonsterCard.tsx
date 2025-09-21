@@ -332,7 +332,7 @@ const MonsterCard = ({ monster, footer, highlight = false, statHighlights }: Mon
             : avatarWrapperStyle.boxShadow,
         }}
       >
-        <MonsterAvatar id={String(monster.id)} />
+        <MonsterAvatar id={String(monster.id)} appearanceRevision={monster.appearanceRevision} />
       </div>
       <header style={headerStyle}>
         <div style={badgeRowStyle}>

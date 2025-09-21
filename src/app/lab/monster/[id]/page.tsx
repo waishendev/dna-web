@@ -15,9 +15,13 @@ import ActionBar from "@/components/ActionBar";
 import { apiFetch } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import {
+  EvolutionInfo,
   MonsterRecord,
+  extractEvolutionInfo,
   extractMonsterFromPayload,
+  formatEvolutionStageLabel,
   mergeMonsterRecords,
+  resolveEvolutionStage,
 } from "@/lib/monsters";
 
 const layoutStyle: CSSProperties = {
@@ -62,6 +66,32 @@ const heroAvatarRingStyle: CSSProperties = {
   border: "1px solid rgba(148, 163, 184, 0.32)",
   boxShadow: "0 36px 75px rgba(15, 23, 42, 0.45)",
   overflow: "hidden",
+};
+
+const evolutionToastStyle: CSSProperties = {
+  position: "fixed",
+  top: "1.5rem",
+  left: "50%",
+  transform: "translate(-50%, 0)",
+  display: "flex",
+  alignItems: "center",
+  gap: "0.65rem",
+  padding: "0.75rem 1.6rem",
+  borderRadius: "999px",
+  background: "rgba(37, 99, 235, 0.92)",
+  color: "#f8fafc",
+  fontWeight: 600,
+  letterSpacing: "0.05em",
+  boxShadow: "0 24px 60px rgba(37, 99, 235, 0.45)",
+  border: "1px solid rgba(147, 197, 253, 0.55)",
+  pointerEvents: "none",
+  zIndex: 1000,
+  backdropFilter: "blur(8px)",
+};
+
+const evolutionToastIconStyle: CSSProperties = {
+  fontSize: "1.1rem",
+  textShadow: "0 0 12px rgba(253, 224, 71, 0.82)",
 };
 
 const actionRowStyle: CSSProperties = {
@@ -196,6 +226,42 @@ function createUpdatedMonster(
       ...monster.raw,
       ...updates,
     },
+  };
+}
+
+function buildEvolutionMessages(
+  monster: MonsterRecord | null,
+  evolution: EvolutionInfo | null,
+): { toast: string; feedback: string } | null {
+  if (!evolution?.happened) {
+    return null;
+  }
+
+  const stageValue = resolveEvolutionStage(monster, evolution);
+  const stageLabel = formatEvolutionStageLabel(stageValue);
+
+  if (stageLabel) {
+    return {
+      toast: `怪兽进化至 ${stageLabel}！`,
+      feedback: `喂食成功！怪兽进化至 ${stageLabel}，属性全面提升。`,
+    };
+  }
+
+  const fallback = evolution.message?.trim();
+  if (fallback) {
+    const toastHasPunctuation = /[!！。]$/u.test(fallback);
+    const feedbackHasPunctuation = /[.!！。]$/u.test(fallback);
+    return {
+      toast: toastHasPunctuation ? fallback : `${fallback}！`,
+      feedback: feedbackHasPunctuation
+        ? `喂食成功！${fallback}`
+        : `喂食成功！${fallback}！`,
+    };
+  }
+
+  return {
+    toast: "怪兽完成进化！",
+    feedback: "喂食成功！怪兽完成进化，属性全面提升。",
   };
 }
 
@@ -406,8 +472,10 @@ export default function MonsterDetailPage() {
   const [isTraining, setIsTraining] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
   const [statHighlights, setStatHighlights] = useState<StatChangeMap | null>(null);
+  const [evolutionNotice, setEvolutionNotice] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const statHighlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const evolutionNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -416,6 +484,10 @@ export default function MonsterDetailPage() {
       if (statHighlightTimeoutRef.current) {
         clearTimeout(statHighlightTimeoutRef.current);
         statHighlightTimeoutRef.current = null;
+      }
+      if (evolutionNoticeTimeoutRef.current) {
+        clearTimeout(evolutionNoticeTimeoutRef.current);
+        evolutionNoticeTimeoutRef.current = null;
       }
     };
   }, []);
@@ -447,6 +519,18 @@ export default function MonsterDetailPage() {
     },
     [],
   );
+
+  const showEvolutionNotice = useCallback((message: string) => {
+    if (evolutionNoticeTimeoutRef.current) {
+      clearTimeout(evolutionNoticeTimeoutRef.current);
+    }
+
+    setEvolutionNotice(message);
+    evolutionNoticeTimeoutRef.current = setTimeout(() => {
+      setEvolutionNotice(null);
+      evolutionNoticeTimeoutRef.current = null;
+    }, 3600);
+  }, []);
 
   const fetchMonster = useCallback(async () => {
     if (!mountedRef.current) {
@@ -577,26 +661,36 @@ export default function MonsterDetailPage() {
         return;
       }
 
-      let updatedMonster: MonsterRecord | null = null;
+      let payload: unknown = null;
       if (response.status !== 204) {
-        const payload = await response.json();
-        updatedMonster = extractMonsterFromPayload(payload, String(monsterId));
+        payload = await response.json();
       }
 
       if (!mountedRef.current) {
         return;
       }
 
+      const updatedMonster =
+        payload != null
+          ? extractMonsterFromPayload(payload, String(monsterId))
+          : null;
+      const evolutionInfo = payload != null ? extractEvolutionInfo(payload) : null;
+
       if (updatedMonster) {
-        const merged = mergeMonsterRecords(snapshot, updatedMonster) ?? updatedMonster;
-        setMonster(merged);
-        triggerStatHighlights(snapshot, merged);
+        setMonster(updatedMonster);
+        triggerStatHighlights(snapshot, updatedMonster);
       } else {
         clearStatHighlights();
         void fetchMonster();
       }
 
-      setActionFeedback({ type: "success", message: "喂食成功，能量已恢复。" });
+      const evolutionMessages = buildEvolutionMessages(updatedMonster, evolutionInfo);
+      if (evolutionMessages) {
+        setActionFeedback({ type: "success", message: evolutionMessages.feedback });
+        showEvolutionNotice(evolutionMessages.toast);
+      } else {
+        setActionFeedback({ type: "success", message: "喂食成功，能量已恢复。" });
+      }
     } catch (err) {
       console.error("Failed to feed monster", err);
       if (mountedRef.current) {
@@ -623,6 +717,7 @@ export default function MonsterDetailPage() {
     fetchMonster,
     clearStatHighlights,
     triggerStatHighlights,
+    showEvolutionNotice,
   ]);
 
   const handleTrain = useCallback(async () => {
@@ -717,6 +812,19 @@ export default function MonsterDetailPage() {
 
   return (
     <main style={layoutStyle}>
+      {evolutionNotice ? (
+        <div
+          className="evolution-toast"
+          style={evolutionToastStyle}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="evolution-toast-icon" style={evolutionToastIconStyle} aria-hidden="true">
+            ✨
+          </span>
+          <span>{evolutionNotice}</span>
+        </div>
+      ) : null}
       <section style={contentStyle}>
         <div style={actionRowStyle}>
           <Link href="/lab" style={backLinkStyle}>
@@ -749,7 +857,11 @@ export default function MonsterDetailPage() {
             {monsterId ? (
               <div style={heroAvatarShellStyle}>
                 <div style={heroAvatarRingStyle}>
-                  <MonsterAvatar id={monsterId} size={160} />
+                  <MonsterAvatar
+                    id={monsterId}
+                    size={160}
+                    appearanceRevision={monster.appearanceRevision}
+                  />
                 </div>
               </div>
             ) : null}
@@ -798,6 +910,38 @@ export default function MonsterDetailPage() {
           <p style={loadingStyle}>未能找到怪兽数据。</p>
         ) : null}
       </section>
+      <style jsx>{`
+        .evolution-toast {
+          animation: evolutionToastFadeIn 0.32s ease forwards;
+        }
+
+        .evolution-toast-icon {
+          animation: evolutionToastPulse 1.6s ease-in-out infinite;
+        }
+
+        @keyframes evolutionToastFadeIn {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, -12px) scale(0.96);
+          }
+          100% {
+            opacity: 1;
+            transform: translate(-50%, 0) scale(1);
+          }
+        }
+
+        @keyframes evolutionToastPulse {
+          0%,
+          100% {
+            transform: scale(1);
+            text-shadow: 0 0 12px rgba(253, 224, 71, 0.82);
+          }
+          50% {
+            transform: scale(1.22);
+            text-shadow: 0 0 18px rgba(253, 224, 71, 0.95);
+          }
+        }
+      `}</style>
     </main>
   );
 }

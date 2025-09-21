@@ -6,6 +6,7 @@ import { getApiBaseUrl } from "@/lib/api";
 type MonsterAvatarProps = {
   id: string;
   size?: number;
+  appearanceRevision?: number | string | null;
 };
 
 const imageStyle: CSSProperties = {
@@ -15,10 +16,19 @@ const imageStyle: CSSProperties = {
   objectFit: "contain",
 };
 
-export default function MonsterAvatar({ id, size = 96 }: MonsterAvatarProps) {
+export default function MonsterAvatar({ id, size = 96, appearanceRevision }: MonsterAvatarProps) {
   const base = getApiBaseUrl();
   const path = `/monsters/${encodeURIComponent(id)}/avatar`;
-  const src = base ? `${base}${path}` : path;
+  const revisionValue =
+    typeof appearanceRevision === "number"
+      ? Number.isFinite(appearanceRevision)
+        ? String(appearanceRevision)
+        : null
+      : typeof appearanceRevision === "string"
+        ? appearanceRevision.trim() || null
+        : null;
+  const baseSrc = base ? `${base}${path}` : path;
+  const src = revisionValue ? `${baseSrc}?rev=${encodeURIComponent(revisionValue)}` : baseSrc;
 
   return (
     <img
